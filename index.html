@@ -24,7 +24,8 @@
             query,
             orderBy,
             Timestamp,
-            getDoc
+            getDoc,
+            setDoc  // ← TAMBAHKAN INI
         } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
         
         const firebaseConfig = {
@@ -51,6 +52,7 @@
             deleteDoc,
             doc,
             getDoc,
+            setDoc,  // ← TAMBAHKAN INI
             onSnapshot,
             query,
             orderBy,
@@ -676,6 +678,24 @@
             70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
             100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
         }
+        
+        /* Sync Status Indicator */
+        .sync-status {
+            font-size: 12px;
+            padding: 2px 6px;
+            border-radius: 10px;
+            margin-left: 8px;
+        }
+        
+        .sync-online {
+            background-color: rgba(16, 185, 129, 0.2);
+            color: var(--success);
+        }
+        
+        .sync-offline {
+            background-color: rgba(239, 68, 68, 0.2);
+            color: var(--danger);
+        }
     </style>
 </head>
 <body>
@@ -727,7 +747,7 @@
                 <div class="page-title">
                     <div>
                         <h2 id="page-main-title"><i class="fas fa-home"></i> Overview</h2>
-                        <p id="page-subtitle">Ringkasan progress harian dan mingguan</p>
+                        <p id="page-subtitle">Ringkasan progress harian dan mingguan <span id="sync-status" class="sync-status sync-online">Firebase Connected</span></p>
                     </div>
                 </div>
                 <button id="sidebar-toggle" class="toggle-sidebar-btn">
@@ -1370,6 +1390,10 @@
                                 style="width: 100%;">
                                 <i class="fas fa-check"></i> Update Progress Hari Ini
                             </button>
+                            
+                            <p style="margin-top: 10px; font-size: 12px; color: var(--text-gray); text-align: center;">
+                                <i class="fas fa-database"></i> Data tersimpan ke Firebase & lokal
+                            </p>
                         </div>
                     </div>
                     
@@ -1491,7 +1515,8 @@
             },
             weeklyData: [],
             roadmapDay: 1,
-            editClipId: null
+            editClipId: null,
+            isFirebaseConnected: true
         };
         
         // DOM Elements
@@ -1504,13 +1529,19 @@
         const sidebarToggle = document.getElementById('sidebar-toggle');
         const pageMainTitle = document.getElementById('page-main-title');
         const pageSubtitle = document.getElementById('page-subtitle');
+        const syncStatusElement = document.getElementById('sync-status');
         
         // Initialize the application
         document.addEventListener('DOMContentLoaded', function() {
             // Check if Firebase is loaded
             if (!window.firebase) {
                 console.error("Firebase not loaded, using localStorage fallback");
+                appState.isFirebaseConnected = false;
+                updateSyncStatus(false);
                 initLocalStorageFallback();
+            } else {
+                appState.isFirebaseConnected = true;
+                updateSyncStatus(true);
             }
             
             // Setup roadmap start date if not exists
@@ -1536,11 +1567,14 @@
             // Setup sidebar toggle
             setupSidebarToggle();
             
-            // Load saved data
+            // Load saved data from localStorage first (for quick UI load)
             loadSavedData();
             
             // Load weekly data from Firebase/localStorage
             loadWeeklyData();
+            
+            // TAMBAHKAN INI: Load daily progress from Firebase
+            loadDailyProgressFromFirebase();
             
             // Calculate roadmap progress
             updateRoadmapProgress();
@@ -1555,6 +1589,21 @@
             // Check for background timers that finished while offline
             checkBackgroundTimers();
         });
+        
+        // Update sync status indicator
+        function updateSyncStatus(isConnected) {
+            if (!syncStatusElement) return;
+            
+            appState.isFirebaseConnected = isConnected;
+            
+            if (isConnected) {
+                syncStatusElement.textContent = "Firebase Connected";
+                syncStatusElement.className = "sync-status sync-online";
+            } else {
+                syncStatusElement.textContent = "Offline Mode";
+                syncStatusElement.className = "sync-status sync-offline";
+            }
+        }
         
         // BUG FIX #1: Improved LocalStorage fallback
         function initLocalStorageFallback() {
@@ -1605,6 +1654,107 @@
                 localStorage.setItem('weeklyData', JSON.stringify(appState.weeklyData));
             } catch (e) {
                 console.error("Error saving to localStorage:", e);
+            }
+        }
+        
+        // SOLUSI: Save daily progress to Firebase
+        async function saveDailyProgressToFirebase() {
+            if (!window.firebase) {
+                console.log("Firebase not available, using localStorage only");
+                saveToLocalStorage();
+                return;
+            }
+            
+            try {
+                // Get today's date string (YYYY-MM-DD)
+                const today = new Date();
+                const dateString = today.toISOString().split('T')[0];
+                
+                const progressData = {
+                    date: dateString,
+                    clipsCut: appState.dailyProgress.clipsCut,
+                    clipsUploaded: appState.dailyProgress.clipsUploaded,
+                    workflowHours: appState.dailyProgress.workflowHours,
+                    lastUpdated: window.firebase.Timestamp.now()
+                };
+                
+                // Use date string as document ID (setDoc with merge)
+                const docRef = window.firebase.doc(window.firebase.db, "daily_progress", dateString);
+                
+                // Use setDoc instead of addDoc to use custom ID
+                await window.firebase.setDoc(docRef, progressData, { merge: true });
+                
+                console.log("Daily progress saved to Firebase:", progressData);
+                
+                // Also save to localStorage as backup
+                saveToLocalStorage();
+                
+                // Update sync status
+                updateSyncStatus(true);
+                
+            } catch (error) {
+                console.error("Error saving daily progress to Firebase:", error);
+                // Fallback to localStorage
+                saveToLocalStorage();
+                
+                // Update sync status
+                updateSyncStatus(false);
+            }
+        }
+        
+        // SOLUSI: Load daily progress from Firebase
+        async function loadDailyProgressFromFirebase() {
+            if (!window.firebase) {
+                console.log("Firebase not available, using localStorage");
+                initLocalStorageFallback();
+                return;
+            }
+            
+            try {
+                // Get today's date string (YYYY-MM-DD)
+                const today = new Date();
+                const dateString = today.toISOString().split('T')[0];
+                
+                // Load today's progress
+                const docRef = window.firebase.doc(window.firebase.db, "daily_progress", dateString);
+                const docSnap = await window.firebase.getDoc(docRef);
+                
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    
+                    appState.dailyProgress = {
+                        clipsCut: data.clipsCut || 0,
+                        clipsUploaded: data.clipsUploaded || 0,
+                        workflowHours: data.workflowHours || 0
+                    };
+                    
+                    console.log("Daily progress loaded from Firebase:", appState.dailyProgress);
+                    
+                    // Save to localStorage as backup
+                    saveToLocalStorage();
+                } else {
+                    console.log("No daily progress found for today, using localStorage");
+                    // Try to load from localStorage
+                    const savedProgress = localStorage.getItem('dailyProgress');
+                    if (savedProgress) {
+                        appState.dailyProgress = JSON.parse(savedProgress);
+                    }
+                }
+                
+                // Update UI
+                updateDailyProgressInputs();
+                updateOverview();
+                
+                // Update sync status
+                updateSyncStatus(true);
+                
+            } catch (error) {
+                console.error("Error loading daily progress from Firebase:", error);
+                // Fallback to localStorage
+                initLocalStorageFallback();
+                
+                // Update sync status
+                updateSyncStatus(false);
             }
         }
         
@@ -1659,7 +1809,10 @@
             
             if (titles[pageId]) {
                 pageMainTitle.innerHTML = titles[pageId].main;
-                pageSubtitle.textContent = titles[pageId].subtitle;
+                pageSubtitle.innerHTML = titles[pageId].subtitle + ' <span id="sync-status" class="sync-status sync-online">Firebase Connected</span>';
+                // Re-attach sync status element reference
+                syncStatusElement = document.getElementById('sync-status');
+                updateSyncStatus(appState.isFirebaseConnected);
             }
         }
         
@@ -1902,7 +2055,7 @@
         }
         
         // Update daily workflow hours based on completed timers
-        function updateWorkflowHours(timerId) {
+        async function updateWorkflowHours(timerId) {
             let hoursToAdd = 0;
             
             // Calculate hours based on timer
@@ -1915,8 +2068,11 @@
             }
             
             appState.dailyProgress.workflowHours += hoursToAdd;
+            
+            // Save to Firebase
+            await saveDailyProgressToFirebase();
+            
             updateOverview();
-            saveToLocalStorage();
         }
         
         // Setup checklist listeners
@@ -1930,7 +2086,7 @@
                     checkbox.checked = savedState;
                 }
                 
-                checkbox.addEventListener('change', function() {
+                checkbox.addEventListener('change', async function() {
                     const id = this.id;
                     const isChecked = this.checked;
                     
@@ -1950,8 +2106,10 @@
                             .length;
                     }
                     
+                    // Save to Firebase
+                    await saveDailyProgressToFirebase();
+                    
                     updateOverview();
-                    saveToLocalStorage();
                 });
             });
             
@@ -2008,9 +2166,9 @@
             const formTitle = document.getElementById('form-title');
             const formSubmitBtn = document.getElementById('clip-form-submit');
             
-            // FEATURE #2: Update daily progress
+            // SOLUSI: Update daily progress dengan Firebase save
             if (updateDailyBtn) {
-                updateDailyBtn.addEventListener('click', function() {
+                updateDailyBtn.addEventListener('click', async function() {
                     const clipsCut = parseInt(document.getElementById('daily-clips-cut').value) || 0;
                     const clipsUploaded = parseInt(document.getElementById('daily-clips-uploaded').value) || 0;
                     
@@ -2018,13 +2176,13 @@
                     appState.dailyProgress.clipsCut = clipsCut;
                     appState.dailyProgress.clipsUploaded = clipsUploaded;
                     
-                    // Save to localStorage
-                    saveToLocalStorage();
+                    // Save to Firebase AND localStorage
+                    await saveDailyProgressToFirebase();
                     
                     // Update Overview
                     updateOverview();
                     
-                    showNotification("Progress harian berhasil diupdate!");
+                    showNotification("Progress harian berhasil disimpan ke Firebase!");
                 });
             }
             
