@@ -16,14 +16,15 @@
             getFirestore, 
             collection, 
             addDoc, 
-            getDocs, 
-            updateDoc, 
+            getDocs,
+            updateDoc,
             deleteDoc, 
             doc,
             onSnapshot,
             query,
             orderBy,
-            Timestamp 
+            Timestamp,
+            getDoc
         } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
         
         const firebaseConfig = {
@@ -49,6 +50,7 @@
             updateDoc,
             deleteDoc,
             doc,
+            getDoc,
             onSnapshot,
             query,
             orderBy,
@@ -663,6 +665,17 @@
             padding: 40px;
             color: var(--text-gray);
         }
+        
+        /* Edit Mode Button */
+        .edit-mode-active {
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
     </style>
 </head>
 <body>
@@ -921,6 +934,9 @@
                             <i class="fas fa-chart-line"></i>
                             <span>Progress Roadmap Anda</span>
                         </div>
+                        <button class="btn btn-danger btn-sm" onclick="resetRoadmap()">
+                            <i class="fas fa-redo"></i> Reset Roadmap
+                        </button>
                     </div>
                     <div class="card-subtext" style="margin-bottom: 15px;">Hari ke-<span id="current-day">1</span> dari 60 hari</div>
                     
@@ -1013,7 +1029,7 @@
                         <div class="checklist">
                             <div class="checklist-item">
                                 <input type="checkbox" class="checklist-checkbox" id="slot2-check1">
-                                <label class="checklist-label" for="slot2-check1">Pilih klip dengan ≥3 dari 4 kriteria (<a href="#checklist" class="menu-link" style="display: inline; padding: 0; color: var(--accent);">link ke halaman Checklist</a>)</label>
+                                <label class="checklist-label" for="slot2-check1">Pilih klip dengan ≥3 dari 4 kriteria (<a href="javascript:void(0)" onclick="showPage('checklist'); document.querySelectorAll('.menu-link').forEach(l => l.classList.remove('active')); document.querySelector('[data-page=checklist]').classList.add('active');" style="color: var(--accent);">link ke halaman Checklist</a>)</label>
                             </div>
                             <div class="checklist-item">
                                 <input type="checkbox" class="checklist-checkbox" id="slot2-check2">
@@ -1312,12 +1328,57 @@
             
             <!-- Evaluasi Mingguan Page -->
             <section id="evaluation-page" class="page hidden">
+                <!-- FEATURE #2: Manual Input Daily Progress -->
                 <div class="cards-container">
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <i class="fas fa-calendar-day"></i>
+                                <span>Progress Hari Ini</span>
+                            </div>
+                        </div>
+                        
+                        <div style="padding: 20px;">
+                            <div class="form-group">
+                                <label class="form-label">Klip Dipotong Hari Ini</label>
+                                <input 
+                                    type="number" 
+                                    class="form-control" 
+                                    id="daily-clips-cut" 
+                                    min="0" 
+                                    value="0"
+                                    placeholder="Berapa klip yang sudah dipotong hari ini?"
+                                >
+                            </div>
+                            
+                            <div class="form-group">
+                                <label class="form-label">Klip Diupload Hari Ini</label>
+                                <input 
+                                    type="number" 
+                                    class="form-control" 
+                                    id="daily-clips-uploaded" 
+                                    min="0" 
+                                    value="0"
+                                    placeholder="Berapa klip yang sudah diupload hari ini?"
+                                >
+                            </div>
+                            
+                            <button 
+                                type="button" 
+                                class="btn btn-primary" 
+                                id="update-daily-progress"
+                                style="width: 100%;">
+                                <i class="fas fa-check"></i> Update Progress Hari Ini
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Form Tambah/Edit Data Klip -->
                     <div class="card" style="grid-column: span 2;">
                         <div class="card-header">
                             <div class="card-title">
                                 <i class="fas fa-plus-circle"></i>
-                                <span>Tambah Data Klip Baru</span>
+                                <span id="form-title">Tambah Data Klip Baru</span>
                             </div>
                         </div>
                         
@@ -1359,8 +1420,12 @@
                                     <textarea class="form-control" id="clip-notes" rows="3" placeholder="Contoh: Hook kuat, durasi 38 detik, upload jam 12.30 WIB"></textarea>
                                 </div>
                                 
-                                <button type="submit" class="btn btn-primary" style="width: 100%;">
+                                <button type="submit" class="btn btn-primary" id="clip-form-submit" style="width: 100%;">
                                     <i class="fas fa-save"></i> Simpan Data Klip
+                                </button>
+                                
+                                <button type="button" class="btn btn-secondary" id="cancel-edit" style="width: 100%; margin-top: 10px; display: none;">
+                                    <i class="fas fa-times"></i> Batalkan Edit
                                 </button>
                             </form>
                         </div>
@@ -1425,7 +1490,8 @@
                 workflowHours: 0
             },
             weeklyData: [],
-            roadmapDay: 1
+            roadmapDay: 1,
+            editClipId: null
         };
         
         // DOM Elements
@@ -1447,13 +1513,18 @@
                 initLocalStorageFallback();
             }
             
+            // Setup roadmap start date if not exists
+            if (!localStorage.getItem('roadmap-start-date')) {
+                localStorage.setItem('roadmap-start-date', new Date().toISOString());
+            }
+            
             // Setup navigation
             setupNavigation();
             
             // Setup accordions
             setupAccordions();
             
-            // Setup timers
+            // Setup timers with background persistence
             setupTimers();
             
             // Setup checklist listeners
@@ -1468,6 +1539,9 @@
             // Load saved data
             loadSavedData();
             
+            // Load weekly data from Firebase/localStorage
+            loadWeeklyData();
+            
             // Calculate roadmap progress
             updateRoadmapProgress();
             
@@ -1477,34 +1551,61 @@
             // Update UI with initial data
             updateOverview();
             updateChecklistDecision();
+            
+            // Check for background timers that finished while offline
+            checkBackgroundTimers();
         });
         
-        // LocalStorage fallback if Firebase fails
+        // BUG FIX #1: Improved LocalStorage fallback
         function initLocalStorageFallback() {
             console.log("Initializing localStorage fallback");
-            // Load data from localStorage
+            
+            // Load daily progress
             const savedProgress = localStorage.getItem('dailyProgress');
-            const savedChecklist = localStorage.getItem('checklistState');
-            const savedWeeklyData = localStorage.getItem('weeklyData');
-            
             if (savedProgress) {
-                appState.dailyProgress = JSON.parse(savedProgress);
+                try {
+                    appState.dailyProgress = JSON.parse(savedProgress);
+                } catch (e) {
+                    console.error("Error parsing dailyProgress:", e);
+                }
             }
             
-            if (savedChecklist) {
-                appState.checklistState = JSON.parse(savedChecklist);
-            }
-            
+            // Load weekly data
+            const savedWeeklyData = localStorage.getItem('weeklyData');
             if (savedWeeklyData) {
-                appState.weeklyData = JSON.parse(savedWeeklyData);
+                try {
+                    appState.weeklyData = JSON.parse(savedWeeklyData);
+                } catch (e) {
+                    console.error("Error parsing weeklyData:", e);
+                }
             }
+            
+            // Load checklist state
+            const savedChecklist = localStorage.getItem('checklistState');
+            if (savedChecklist) {
+                try {
+                    appState.checklistState = JSON.parse(savedChecklist);
+                } catch (e) {
+                    console.error("Error parsing checklistState:", e);
+                }
+            }
+            
+            console.log("LocalStorage data loaded:", {
+                dailyProgress: appState.dailyProgress,
+                weeklyData: appState.weeklyData.length,
+                checklistState: Object.keys(appState.checklistState).length
+            });
         }
         
         // Save data to localStorage
         function saveToLocalStorage() {
-            localStorage.setItem('dailyProgress', JSON.stringify(appState.dailyProgress));
-            localStorage.setItem('checklistState', JSON.stringify(appState.checklistState));
-            localStorage.setItem('weeklyData', JSON.stringify(appState.weeklyData));
+            try {
+                localStorage.setItem('dailyProgress', JSON.stringify(appState.dailyProgress));
+                localStorage.setItem('checklistState', JSON.stringify(appState.checklistState));
+                localStorage.setItem('weeklyData', JSON.stringify(appState.weeklyData));
+            } catch (e) {
+                console.error("Error saving to localStorage:", e);
+            }
         }
         
         // Setup page navigation
@@ -1540,7 +1641,8 @@
                 
                 // Load data for the page if needed
                 if (pageId === 'evaluation') {
-                    loadWeeklyData();
+                    // Already loaded, just ensure UI is updated
+                    updateDailyProgressInputs();
                 }
             }
         }
@@ -1583,7 +1685,7 @@
             });
         }
         
-        // Setup timers for workflow slots
+        // FEATURE #3: Timer with Background Persistence
         function setupTimers() {
             // Setup each timer
             for (let i = 1; i <= 5; i++) {
@@ -1600,6 +1702,44 @@
                 
                 // Update display
                 updateTimerDisplay(timerId);
+                
+                // Check for background timer that was running
+                const startTimeStr = localStorage.getItem(`${timerId}-start-time`);
+                const initialTimeStr = localStorage.getItem(`${timerId}-initial-time`);
+                
+                if (startTimeStr && initialTimeStr) {
+                    // Timer was running in background
+                    const startTime = parseInt(startTimeStr);
+                    const initialTime = parseInt(initialTimeStr);
+                    const now = Date.now();
+                    const elapsed = Math.floor((now - startTime) / 1000);
+                    const remainingTime = Math.max(initialTime - elapsed, 0);
+                    
+                    if (remainingTime > 0) {
+                        // Resume timer automatically
+                        appState.timers[timerId].time = remainingTime;
+                        updateTimerDisplay(timerId);
+                        
+                        // Auto-start after 1 second
+                        setTimeout(() => {
+                            startTimer(timerId, true); // true = background resume
+                        }, 1000);
+                    } else {
+                        // Timer finished while offline
+                        appState.timers[timerId].time = 0;
+                        updateTimerDisplay(timerId);
+                        
+                        // Clean up
+                        localStorage.removeItem(`${timerId}-start-time`);
+                        localStorage.removeItem(`${timerId}-initial-time`);
+                        
+                        // Update workflow hours
+                        updateWorkflowHours(timerId);
+                        
+                        // Show notification
+                        showNotification(`Timer ${i} selesai saat browser tertutup.`);
+                    }
+                }
                 
                 // Start button
                 startBtn.addEventListener('click', () => {
@@ -1618,13 +1758,20 @@
             }
         }
         
-        // Start a timer
-        function startTimer(timerId) {
+        // Start a timer with background persistence
+        function startTimer(timerId, isBackgroundResume = false) {
             const timer = appState.timers[timerId];
             
             if (timer.running) return;
             
             timer.running = true;
+            
+            // Save start time and initial time for background persistence
+            if (!isBackgroundResume) {
+                const startTime = Date.now();
+                localStorage.setItem(`${timerId}-start-time`, startTime.toString());
+                localStorage.setItem(`${timerId}-initial-time`, timer.time.toString());
+            }
             
             // Update button states
             document.getElementById(`start-${timerId.slice(-1)}`).disabled = true;
@@ -1640,6 +1787,10 @@
                 if (timer.time <= 0) {
                     clearInterval(timer.interval);
                     timer.running = false;
+                    
+                    // Clean up background persistence
+                    localStorage.removeItem(`${timerId}-start-time`);
+                    localStorage.removeItem(`${timerId}-initial-time`);
                     
                     // Show notification
                     showNotification(`Timer ${timerId.slice(-1)} selesai!`);
@@ -1665,6 +1816,13 @@
             
             timer.running = false;
             clearInterval(timer.interval);
+            
+            // Remove background persistence data
+            localStorage.removeItem(`${timerId}-start-time`);
+            localStorage.removeItem(`${timerId}-initial-time`);
+            
+            // Save current time
+            localStorage.setItem(timerId, timer.time.toString());
             
             // Update button states
             document.getElementById(`start-${timerId.slice(-1)}`).disabled = false;
@@ -1694,7 +1852,11 @@
             
             timer.time = initialTime;
             updateTimerDisplay(timerId);
+            
+            // Clean up all timer data
             localStorage.removeItem(timerId);
+            localStorage.removeItem(`${timerId}-start-time`);
+            localStorage.removeItem(`${timerId}-initial-time`);
             
             // Update button states
             document.getElementById(`start-${timerId.slice(-1)}`).disabled = false;
@@ -1714,13 +1876,38 @@
             display.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
         }
         
+        // Check for background timers that finished while offline
+        function checkBackgroundTimers() {
+            for (let i = 1; i <= 5; i++) {
+                const timerId = `timer-${i}`;
+                const startTimeStr = localStorage.getItem(`${timerId}-start-time`);
+                const initialTimeStr = localStorage.getItem(`${timerId}-initial-time`);
+                
+                if (startTimeStr && initialTimeStr) {
+                    const startTime = parseInt(startTimeStr);
+                    const initialTime = parseInt(initialTimeStr);
+                    const now = Date.now();
+                    const elapsed = Math.floor((now - startTime) / 1000);
+                    
+                    if (elapsed >= initialTime) {
+                        // Timer finished while offline
+                        localStorage.removeItem(`${timerId}-start-time`);
+                        localStorage.removeItem(`${timerId}-initial-time`);
+                        
+                        // Update workflow hours
+                        updateWorkflowHours(timerId);
+                    }
+                }
+            }
+        }
+        
         // Update daily workflow hours based on completed timers
         function updateWorkflowHours(timerId) {
             let hoursToAdd = 0;
             
             // Calculate hours based on timer
             switch(timerId) {
-                case 'timer-1': hoursToAdd = 1.5; break; // 90 minutes
+                case 'timer-1': hoursToAdd = 1.0; break; // 60 minutes
                 case 'timer-2': hoursToAdd = 0.5; break; // 30 minutes
                 case 'timer-3': hoursToAdd = 1.5; break; // 90 minutes
                 case 'timer-4': hoursToAdd = 0.33; break; // 20 minutes
@@ -1737,6 +1924,12 @@
             // Workflow checklist items
             const workflowCheckboxes = document.querySelectorAll('.workflow-slot input[type="checkbox"]');
             workflowCheckboxes.forEach(checkbox => {
+                // Load saved state
+                const savedState = appState.checklistState[checkbox.id];
+                if (savedState !== undefined) {
+                    checkbox.checked = savedState;
+                }
+                
                 checkbox.addEventListener('change', function() {
                     const id = this.id;
                     const isChecked = this.checked;
@@ -1765,7 +1958,17 @@
             // Criteria checklist items
             const criteriaCheckboxes = document.querySelectorAll('#checklist-page input[type="checkbox"]');
             criteriaCheckboxes.forEach(checkbox => {
-                checkbox.addEventListener('change', updateChecklistDecision);
+                // Load saved state
+                const savedState = appState.checklistState[checkbox.id];
+                if (savedState !== undefined) {
+                    checkbox.checked = savedState;
+                }
+                
+                checkbox.addEventListener('change', function() {
+                    appState.checklistState[this.id] = this.checked;
+                    saveToLocalStorage();
+                    updateChecklistDecision();
+                });
             });
         }
         
@@ -1796,11 +1999,36 @@
             }
         }
         
-        // Setup evaluation form
+        // Setup evaluation form with edit functionality
         function setupEvaluationForm() {
             const form = document.getElementById('clip-form');
             const refreshBtn = document.getElementById('refresh-data');
+            const cancelEditBtn = document.getElementById('cancel-edit');
+            const updateDailyBtn = document.getElementById('update-daily-progress');
+            const formTitle = document.getElementById('form-title');
+            const formSubmitBtn = document.getElementById('clip-form-submit');
             
+            // FEATURE #2: Update daily progress
+            if (updateDailyBtn) {
+                updateDailyBtn.addEventListener('click', function() {
+                    const clipsCut = parseInt(document.getElementById('daily-clips-cut').value) || 0;
+                    const clipsUploaded = parseInt(document.getElementById('daily-clips-uploaded').value) || 0;
+                    
+                    // Update state
+                    appState.dailyProgress.clipsCut = clipsCut;
+                    appState.dailyProgress.clipsUploaded = clipsUploaded;
+                    
+                    // Save to localStorage
+                    saveToLocalStorage();
+                    
+                    // Update Overview
+                    updateOverview();
+                    
+                    showNotification("Progress harian berhasil diupdate!");
+                });
+            }
+            
+            // Form submit handler with edit functionality
             form.addEventListener('submit', async function(e) {
                 e.preventDefault();
                 
@@ -1810,7 +2038,7 @@
                 const clipNotes = document.getElementById('clip-notes').value;
                 
                 // Create clip object
-                const clip = {
+                const clipData = {
                     title: clipTitle,
                     views: clipViews,
                     status: clipStatus,
@@ -1818,22 +2046,69 @@
                     date: new Date().toISOString()
                 };
                 
-                // Save to Firebase or localStorage
-                if (window.firebase) {
-                    try {
-                        await window.firebase.addDoc(window.firebase.collection(window.firebase.db, "weekly_evaluation"), clip);
-                        showNotification("Data klip berhasil disimpan ke Firebase!");
-                    } catch (error) {
-                        console.error("Error saving to Firebase:", error);
-                        // Fallback to localStorage
-                        appState.weeklyData.push(clip);
-                        saveToLocalStorage();
-                        showNotification("Data klip berhasil disimpan (local)!");
+                // Check if edit mode
+                const isEditMode = appState.editClipId !== null;
+                
+                if (isEditMode) {
+                    // UPDATE MODE
+                    const clipId = appState.editClipId;
+                    
+                    if (clipId !== 'local' && window.firebase) {
+                        try {
+                            await window.firebase.updateDoc(
+                                window.firebase.doc(window.firebase.db, "weekly_evaluation", clipId),
+                                clipData
+                            );
+                            showNotification("Data klip berhasil diupdate di Firebase!");
+                        } catch (error) {
+                            console.error("Error updating Firebase:", error);
+                            // Fallback localStorage
+                            const index = appState.weeklyData.findIndex(c => c.id === clipId);
+                            if (index !== -1) {
+                                appState.weeklyData[index] = { ...clipData, id: clipId };
+                                saveToLocalStorage();
+                            }
+                            showNotification("Data klip berhasil diupdate (local)!");
+                        }
+                    } else {
+                        // Update localStorage
+                        const index = appState.weeklyData.findIndex(c => c.id === clipId);
+                        if (index !== -1) {
+                            appState.weeklyData[index] = { ...clipData, id: clipId };
+                            saveToLocalStorage();
+                        }
+                        showNotification("Data klip berhasil diupdate!");
                     }
+                    
+                    // Reset edit mode
+                    resetEditMode();
+                    
                 } else {
-                    appState.weeklyData.push(clip);
-                    saveToLocalStorage();
-                    showNotification("Data klip berhasil disimpan!");
+                    // ADD MODE
+                    let newClipId = null;
+                    
+                    if (window.firebase) {
+                        try {
+                            const docRef = await window.firebase.addDoc(
+                                window.firebase.collection(window.firebase.db, "weekly_evaluation"),
+                                clipData
+                            );
+                            newClipId = docRef.id;
+                            showNotification("Data klip berhasil disimpan ke Firebase!");
+                        } catch (error) {
+                            console.error("Error saving to Firebase:", error);
+                            // Fallback localStorage
+                            newClipId = 'local-' + Date.now();
+                            appState.weeklyData.push({ ...clipData, id: newClipId });
+                            saveToLocalStorage();
+                            showNotification("Data klip berhasil disimpan (local)!");
+                        }
+                    } else {
+                        newClipId = 'local-' + Date.now();
+                        appState.weeklyData.push({ ...clipData, id: newClipId });
+                        saveToLocalStorage();
+                        showNotification("Data klip berhasil disimpan!");
+                    }
                 }
                 
                 // Reset form
@@ -1844,13 +2119,164 @@
                 updateOverview();
             });
             
+            // Cancel edit button
+            if (cancelEditBtn) {
+                cancelEditBtn.addEventListener('click', resetEditMode);
+            }
+            
             // Refresh button
             if (refreshBtn) {
                 refreshBtn.addEventListener('click', loadWeeklyData);
             }
         }
         
-        // Load weekly evaluation data
+        // FEATURE #1: Reset edit mode
+        function resetEditMode() {
+            const form = document.getElementById('clip-form');
+            const formTitle = document.getElementById('form-title');
+            const formSubmitBtn = document.getElementById('clip-form-submit');
+            const cancelEditBtn = document.getElementById('cancel-edit');
+            
+            appState.editClipId = null;
+            
+            // Reset form
+            form.reset();
+            
+            // Update UI
+            formTitle.textContent = "Tambah Data Klip Baru";
+            formSubmitBtn.innerHTML = '<i class="fas fa-save"></i> Simpan Data Klip';
+            formSubmitBtn.className = 'btn btn-primary';
+            formSubmitBtn.classList.remove('edit-mode-active');
+            
+            if (cancelEditBtn) {
+                cancelEditBtn.style.display = 'none';
+            }
+        }
+        
+        // FEATURE #1: Edit clip function
+        window.editClip = async function(clipId) {
+            showNotification("Memuat data klip...");
+            
+            try {
+                let clipData = null;
+                
+                if (clipId.startsWith('local-')) {
+                    // Load from localStorage
+                    clipData = appState.weeklyData.find(c => c.id === clipId);
+                } else if (window.firebase) {
+                    // Load from Firebase
+                    const docSnap = await window.firebase.getDoc(
+                        window.firebase.doc(window.firebase.db, "weekly_evaluation", clipId)
+                    );
+                    
+                    if (docSnap.exists()) {
+                        clipData = docSnap.data();
+                        clipData.id = docSnap.id;
+                    }
+                }
+                
+                if (clipData) {
+                    // Populate form
+                    document.getElementById('clip-title').value = clipData.title || '';
+                    document.getElementById('clip-views').value = clipData.views || 0;
+                    
+                    // Set status radio
+                    const statusRadio = document.querySelector(`input[name="status"][value="${clipData.status}"]`);
+                    if (statusRadio) {
+                        statusRadio.checked = true;
+                    }
+                    
+                    document.getElementById('clip-notes').value = clipData.notes || '';
+                    
+                    // Set edit mode
+                    appState.editClipId = clipId;
+                    
+                    // Update UI
+                    const formTitle = document.getElementById('form-title');
+                    const formSubmitBtn = document.getElementById('clip-form-submit');
+                    const cancelEditBtn = document.getElementById('cancel-edit');
+                    
+                    formTitle.textContent = "Edit Data Klip";
+                    formSubmitBtn.innerHTML = '<i class="fas fa-save"></i> Update Data Klip';
+                    formSubmitBtn.className = 'btn btn-success';
+                    formSubmitBtn.classList.add('edit-mode-active');
+                    
+                    if (cancelEditBtn) {
+                        cancelEditBtn.style.display = 'block';
+                    }
+                    
+                    // Scroll to form
+                    document.getElementById('clip-form').scrollIntoView({ 
+                        behavior: 'smooth', 
+                        block: 'start' 
+                    });
+                    
+                    showNotification("Data klip berhasil dimuat. Edit dan klik Update.");
+                } else {
+                    showNotification("Data klip tidak ditemukan.", true);
+                }
+            } catch (error) {
+                console.error("Error loading clip for edit:", error);
+                showNotification("Error memuat data klip", true);
+            }
+        };
+        
+        // Delete clip function
+        window.deleteClip = async function(clipId) {
+            if (!confirm("Apakah Anda yakin ingin menghapus data klip ini?")) return;
+            
+            try {
+                // Delete from Firebase if it's a Firebase ID
+                if (!clipId.startsWith('local-') && window.firebase) {
+                    await window.firebase.deleteDoc(
+                        window.firebase.doc(window.firebase.db, "weekly_evaluation", clipId)
+                    );
+                    showNotification("Data klip berhasil dihapus dari Firebase!");
+                } else {
+                    // Delete from localStorage
+                    appState.weeklyData = appState.weeklyData.filter(clip => clip.id !== clipId);
+                    saveToLocalStorage();
+                    showNotification("Data klip berhasil dihapus!");
+                }
+                
+                // Reload data
+                loadWeeklyData();
+                updateOverview();
+                
+                // Reset edit mode if deleting the currently edited clip
+                if (appState.editClipId === clipId) {
+                    resetEditMode();
+                }
+                
+            } catch (error) {
+                console.error("Error deleting clip:", error);
+                showNotification("Error menghapus data klip", true);
+            }
+        };
+        
+        // BUG FIX #1: Load saved data
+        function loadSavedData() {
+            // Daily progress inputs
+            updateDailyProgressInputs();
+            
+            // Checklist states are already loaded in setupChecklistListeners()
+        }
+        
+        // Update daily progress inputs
+        function updateDailyProgressInputs() {
+            const dailyClipsCut = document.getElementById('daily-clips-cut');
+            const dailyClipsUploaded = document.getElementById('daily-clips-uploaded');
+            
+            if (dailyClipsCut) {
+                dailyClipsCut.value = appState.dailyProgress.clipsCut;
+            }
+            
+            if (dailyClipsUploaded) {
+                dailyClipsUploaded.value = appState.dailyProgress.clipsUploaded;
+            }
+        }
+        
+        // BUG FIX #1: Load weekly data from Firebase/localStorage
         async function loadWeeklyData() {
             const tableBody = document.getElementById('clips-table-body');
             
@@ -1885,62 +2311,14 @@
                     clips = appState.weeklyData;
                 }
                 
-                // Clear table
-                tableBody.innerHTML = '';
+                // Update app state
+                appState.weeklyData = clips;
                 
-                if (clips.length === 0) {
-                    tableBody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 40px; color: var(--text-gray);">Belum ada data klip. Tambahkan data baru di atas.</td></tr>';
-                    return;
-                }
+                // Save to localStorage for offline use
+                saveToLocalStorage();
                 
-                // Sort by date (newest first)
-                clips.sort((a, b) => new Date(b.date) - new Date(a.date));
-                
-                // Add rows to table
-                clips.forEach(clip => {
-                    const row = document.createElement('tr');
-                    
-                    // Status indicator
-                    let statusText = '';
-                    let statusClass = '';
-                    
-                    switch(clip.status) {
-                        case 'live':
-                            statusText = '🟢 Hidup';
-                            statusClass = 'status-live';
-                            break;
-                        case 'normal':
-                            statusText = '🟡 Biasa';
-                            statusClass = 'status-normal';
-                            break;
-                        case 'dead':
-                            statusText = '🔴 Mati';
-                            statusClass = 'status-dead';
-                            break;
-                    }
-                    
-                    row.innerHTML = `
-                        <td>${clip.title}</td>
-                        <td>${clip.views.toLocaleString()}</td>
-                        <td>
-                            <div class="status-indicator">
-                                <span class="status-dot ${statusClass}"></span>
-                                <span>${statusText}</span>
-                            </div>
-                        </td>
-                        <td>${clip.notes || '-'}</td>
-                        <td>
-                            <button class="btn btn-secondary btn-sm" onclick="editClip('${clip.id || 'local'}')">
-                                <i class="fas fa-edit"></i> Edit
-                            </button>
-                            <button class="btn btn-danger btn-sm" onclick="deleteClip('${clip.id || 'local'}')">
-                                <i class="fas fa-trash"></i> Hapus
-                            </button>
-                        </td>
-                    `;
-                    
-                    tableBody.appendChild(row);
-                });
+                // Update table
+                updateClipsTable(clips);
                 
                 // Update overview with new data
                 updateOverview();
@@ -1951,51 +2329,68 @@
             }
         }
         
-        // Edit clip function
-        window.editClip = function(clipId) {
-            alert(`Edit fitur untuk klip ${clipId} akan dikembangkan lebih lanjut.`);
-        };
-        
-        // Delete clip function
-        window.deleteClip = async function(clipId) {
-            if (!confirm("Apakah Anda yakin ingin menghapus data klip ini?")) return;
+        // Update clips table
+        function updateClipsTable(clips) {
+            const tableBody = document.getElementById('clips-table-body');
             
-            try {
-                // Delete from Firebase if it's a Firebase ID
-                if (clipId !== 'local' && window.firebase) {
-                    await window.firebase.deleteDoc(window.firebase.doc(window.firebase.db, "weekly_evaluation", clipId));
-                    showNotification("Data klip berhasil dihapus dari Firebase!");
-                } else {
-                    // Delete from localStorage
-                    appState.weeklyData = appState.weeklyData.filter(clip => clip.id !== clipId);
-                    saveToLocalStorage();
-                    showNotification("Data klip berhasil dihapus!");
-                }
-                
-                // Reload data
-                loadWeeklyData();
-                updateOverview();
-                
-            } catch (error) {
-                console.error("Error deleting clip:", error);
-                showNotification("Error menghapus data klip", true);
+            if (!tableBody) return;
+            
+            // Clear table
+            tableBody.innerHTML = '';
+            
+            if (clips.length === 0) {
+                tableBody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 40px; color: var(--text-gray);">Belum ada data klip. Tambahkan data baru di atas.</td></tr>';
+                return;
             }
-        };
-        
-        // Load saved data
-        function loadSavedData() {
-            // Load checklist state
-            Object.keys(appState.checklistState).forEach(id => {
-                const checkbox = document.getElementById(id);
-                if (checkbox) {
-                    checkbox.checked = appState.checklistState[id];
+            
+            // Sort by date (newest first)
+            clips.sort((a, b) => new Date(b.date) - new Date(a.date));
+            
+            // Add rows to table
+            clips.forEach(clip => {
+                const row = document.createElement('tr');
+                
+                // Status indicator
+                let statusText = '';
+                let statusClass = '';
+                
+                switch(clip.status) {
+                    case 'live':
+                        statusText = '🟢 Hidup';
+                        statusClass = 'status-live';
+                        break;
+                    case 'normal':
+                        statusText = '🟡 Biasa';
+                        statusClass = 'status-normal';
+                        break;
+                    case 'dead':
+                        statusText = '🔴 Mati';
+                        statusClass = 'status-dead';
+                        break;
                 }
+                
+                row.innerHTML = `
+                    <td>${clip.title || '-'}</td>
+                    <td>${(clip.views || 0).toLocaleString()}</td>
+                    <td>
+                        <div class="status-indicator">
+                            <span class="status-dot ${statusClass}"></span>
+                            <span>${statusText}</span>
+                        </div>
+                    </td>
+                    <td>${clip.notes || '-'}</td>
+                    <td>
+                        <button class="btn btn-secondary btn-sm" onclick="editClip('${clip.id}')">
+                            <i class="fas fa-edit"></i> Edit
+                        </button>
+                        <button class="btn btn-danger btn-sm" onclick="deleteClip('${clip.id}')">
+                            <i class="fas fa-trash"></i> Hapus
+                        </button>
+                    </td>
+                `;
+                
+                tableBody.appendChild(row);
             });
-            
-            // Load weekly data if not using Firebase
-            if (!window.firebase) {
-                // Don't load sample data - start fresh
-            }
         }
         
         // Update overview page
@@ -2006,7 +2401,7 @@
             document.getElementById('today-workflow-hours').textContent = appState.dailyProgress.workflowHours.toFixed(1);
             
             // Calculate weekly stats from weeklyData
-            let weeklyClips = appState.weeklyData.length;
+            const weeklyClips = appState.weeklyData.length;
             let liveClips = 0;
             let normalClips = 0;
             let deadClips = 0;
@@ -2039,12 +2434,35 @@
             
             // Update total clips made
             document.getElementById('total-clips-made').textContent = Math.max(appState.dailyProgress.clipsCut, weeklyClips);
+            
+            // Save to localStorage
+            saveToLocalStorage();
         }
         
-        // Update roadmap progress
+        // BUG FIX #2: Update roadmap progress with real date calculation
         function updateRoadmapProgress() {
-            // Calculate days (for demo, we'll use a fixed day 1)
-            const currentDay = 1;
+            // Get start date
+            const startDateStr = localStorage.getItem('roadmap-start-date');
+            let startDate;
+            
+            if (!startDateStr) {
+                startDate = new Date();
+                localStorage.setItem('roadmap-start-date', startDate.toISOString());
+            } else {
+                startDate = new Date(startDateStr);
+            }
+            
+            const today = new Date();
+            
+            // Reset time part for accurate day calculation
+            startDate.setHours(0, 0, 0, 0);
+            today.setHours(0, 0, 0, 0);
+            
+            // Calculate days passed (minimum 1)
+            const timeDiff = today.getTime() - startDate.getTime();
+            const daysPassed = Math.floor(timeDiff / (1000 * 60 * 60 * 24)) + 1;
+            const currentDay = Math.min(Math.max(daysPassed, 1), 60); // Min 1, Max 60 hari
+            
             const totalDays = 60;
             
             // Update display
@@ -2068,8 +2486,18 @@
             }
             
             document.getElementById('current-phase').textContent = currentPhase;
-            document.getElementById('phase-days-left').textContent = phaseDaysLeft;
+            document.getElementById('phase-days-left').textContent = Math.max(phaseDaysLeft, 0);
         }
+        
+        // BUG FIX #2: Reset roadmap function
+        window.resetRoadmap = function() {
+            if (confirm("Reset roadmap ke hari 1? Data klip tidak akan terhapus.")) {
+                localStorage.removeItem('roadmap-start-date');
+                localStorage.setItem('roadmap-start-date', new Date().toISOString());
+                updateRoadmapProgress();
+                showNotification("Roadmap berhasil direset ke hari 1!");
+            }
+        };
         
         // Setup sidebar toggle
         function setupSidebarToggle() {
@@ -2134,6 +2562,12 @@
             
             if (Notification.permission === "granted") {
                 new Notification(title, { body });
+            } else if (Notification.permission !== "denied") {
+                Notification.requestPermission().then(permission => {
+                    if (permission === "granted") {
+                        new Notification(title, { body });
+                    }
+                });
             }
         }
         
@@ -2145,17 +2579,9 @@
             }
             
             if (Notification.permission === "default") {
-                Notification.requestPermission().then(permission => {
-                    if (permission === "granted") {
-                        console.log("Notification permission granted");
-                    }
-                });
+                Notification.requestPermission();
             }
         }
-        
-        // Make functions available globally for button onclick handlers
-        window.editClip = editClip;
-        window.deleteClip = deleteClip;
     </script>
 </body>
 </html>
